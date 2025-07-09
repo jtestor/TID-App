@@ -50,37 +50,46 @@ final class IoTClient {
     }
     
     
-    private func fetchTelemetry() {
-        URLSession.shared.dataTask(with: telemetryURL) { data, resp, err in
+     func fetchTelemetry() {
+        var req = URLRequest(url: telemetryURL)
+        req.httpMethod = "GET"
+
+        // Agrega el fingerprint como header
+        if let fingerprint = KeyManager.publicKeyFingerprint() {
+            req.setValue("\(fingerprint)", forHTTPHeaderField: "Authorization")
+            print(" Enviando Authorization:", "\(fingerprint)")
+        } else {
+            print(" No se pudo generar fingerprint")
+        }
+
+        URLSession.shared.dataTask(with: req) { data, resp, err in
             if let err = err { print("NET telemetry:", err); return }
             guard (resp as? HTTPURLResponse)?.statusCode == 200, let data else { return }
-            
-            // cuerpo crudo para inspección
+
             if let raw = String(data: data, encoding: .utf8) {
                 print(" RAW /telemetria:", raw)
             }
-            
+
             guard
                 let json  = try? JSONSerialization.jsonObject(with: data) as? [String:String],
                 let b64   = json["data"],
                 let cipher = Data(base64Encoded: b64)
             else { print(" JSON sin 'data'"); return }
-            
+
             print(" bytes cifrados:", cipher.count)
-            
-         
+
             guard let clear = AESKeyManager.shared.decryptCBC(cipher) else {
                 print(" AES-CBC decrypt falló"); return
             }
-            
+
             guard
                 let obj    = try? JSONSerialization.jsonObject(with: clear) as? [String:Any],
                 let type   = obj["type"]  as? String,
                 let value  = obj["value"] as? Double
             else { print(" JSON claro inválido"); return }
-            
+
             print("Telemetría:", obj)
-            
+
             if type == "weight" {
                 DispatchQueue.main.async {
                     self.manager?.saveWeight(valueKg: value, date: Date())
@@ -94,41 +103,64 @@ final class IoTClient {
 
 final class AESKeyManager {
     static let shared = AESKeyManager()
-    private var keyData: Data?
-    
-    func setKey(_ data: Data) { keyData = data }
-    
-    
+    private let keychainKey = "aes_key_tid"
+    private(set) var keyData: Data?
+
+    init() {
+        if let stored = KeychainHelper.load(key: keychainKey) {
+            keyData = stored
+            print("✅ AES Key restaurada desde Keychain (\(stored.count) bytes)")
+        } else {
+            print("🛑 No se encontró AES Key en Keychain")
+        }
+    }
+
+    func setKey(_ data: Data) {
+        keyData = data
+        if KeychainHelper.save(key: keychainKey, data: data) {
+            print("AES Key guardada en Keychain")
+        } else {
+            print("Error al guardar AES Key en Keychain")
+        }
+    }
+
+    var hasKey: Bool {
+        return keyData != nil
+    }
+
     func decryptCBC(_ combined: Data) -> Data? {
         guard combined.count > 16, let keyData else { return nil }
-        
+
         let iv         = combined.prefix(16)
         let ciphertext = combined.dropFirst(16)
-        
 
         let outCapacity = ciphertext.count + kCCBlockSizeAES128
-        var outData     = Data(count: outCapacity)
+        var outData = Data(count: outCapacity)
         var outLen: size_t = 0
-        
+
         let status = outData.withUnsafeMutableBytes { outRaw in
-            keyData.withUnsafeBytes      { keyPtr in
-            iv.withUnsafeBytes           { ivPtr  in
-            ciphertext.withUnsafeBytes   { ctPtr  in
-                CCCrypt(CCOperation(kCCDecrypt),
-                        CCAlgorithm(kCCAlgorithmAES128),
-                        CCOptions(kCCOptionPKCS7Padding),
-                        keyPtr.baseAddress, keyData.count,
-                        ivPtr.baseAddress,
-                        ctPtr.baseAddress, ciphertext.count,
-                        outRaw.baseAddress, outCapacity,
-                        &outLen)
-            }}}
+            keyData.withUnsafeBytes { keyPtr in
+                iv.withUnsafeBytes { ivPtr in
+                    ciphertext.withUnsafeBytes { ctPtr in
+                        CCCrypt(CCOperation(kCCDecrypt),
+                                CCAlgorithm(kCCAlgorithmAES128),
+                                CCOptions(kCCOptionPKCS7Padding),
+                                keyPtr.baseAddress, keyData.count,
+                                ivPtr.baseAddress,
+                                ctPtr.baseAddress, ciphertext.count,
+                                outRaw.baseAddress, outCapacity,
+                                &outLen)
+                    }
+                }
+            }
         }
-        
+
         guard status == kCCSuccess else {
-            print(" CommonCrypto status:", status); return nil
+            print(" CommonCrypto status:", status)
+            return nil
         }
-        outData.removeSubrange(outLen..<outData.count)   
+
+        outData.removeSubrange(outLen..<outData.count)
         return outData
     }
 }

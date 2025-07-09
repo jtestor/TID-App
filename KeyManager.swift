@@ -4,18 +4,18 @@
 //
 //  Created by Miguel Testor on 19-05-25.
 //
+
 import Foundation
 import Security
-
+import CryptoKit
 
 enum KeyManager {
 
     //–––––––––––––––– Tag Keychain
     private static let tag = "com.demoapptid.privatekey".data(using: .utf8)!
-
-
+    
     static func generateKeyPairIfNeeded() {
-        guard privateKey() == nil else { return } 
+        guard privateKey() == nil else { return }
 
         let privAttrs: [String: Any] = [
             kSecAttrIsPermanent     as String: true,
@@ -32,7 +32,6 @@ enum KeyManager {
         _ = SecKeyCreateRandomKey(attrs as CFDictionary, nil)
     }
 
-
     private static func privateKey() -> SecKey? {
         let q: [String: Any] = [
             kSecClass              as String: kSecClassKey,
@@ -44,27 +43,43 @@ enum KeyManager {
         return SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess ? (item as! SecKey) : nil
     }
 
-
-    private static func asn1Len(_ n: Int) -> [UInt8] {
-        if n < 128 { return [UInt8(n)] }
-        var len = n, out: [UInt8] = []
-        while len > 0 { out.insert(UInt8(len & 0xFF), at: 0); len >>= 8 }
-        return [0x80 | UInt8(out.count)] + out
+    static func publicKey() -> SecKey? {
+        guard let priv = privateKey() else { return nil }
+        return SecKeyCopyPublicKey(priv)
     }
 
-
-    static func publicKeyPEM_PKIX() -> String? {
-        guard let priv = privateKey(),
-              let pub  = SecKeyCopyPublicKey(priv),
+    //–––––––––––––––––––––––––––––––––––––––––––––––––
+    // Fingerprint SHA-256 desde clave pública en formato PKIX
+    static func publicKeyFingerprint() -> String? {
+        guard let pub = publicKey(),
               let pkcs1 = SecKeyCopyExternalRepresentation(pub, nil) as Data? else { return nil }
 
-   
         let algId: [UInt8] = [
             0x30, 0x0D,
             0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
             0x05, 0x00
         ]
-        let bitStr  = [0x00] + [UInt8](pkcs1)                       
+        let bitStr  = [0x00] + [UInt8](pkcs1)
+        let bitSeq  = [0x03] + asn1Len(bitStr.count) + bitStr
+        let spkiSeq = [0x30] + asn1Len(algId.count + bitSeq.count) + algId + bitSeq
+
+        let data = Data(spkiSeq)
+        let hash = SHA256.hash(data: data)
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    //–––––––––––––––––––––––––––––––––––––––––––––––––
+    // Exportar clave pública en formato PEM (PKIX)
+    static func publicKeyPEM_PKIX() -> String? {
+        guard let pub = publicKey(),
+              let pkcs1 = SecKeyCopyExternalRepresentation(pub, nil) as Data? else { return nil }
+
+        let algId: [UInt8] = [
+            0x30, 0x0D,
+            0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
+            0x05, 0x00
+        ]
+        let bitStr  = [0x00] + [UInt8](pkcs1)
         let bitSeq  = [0x03] + asn1Len(bitStr.count) + bitStr
         let spkiSeq = [0x30] + asn1Len(algId.count + bitSeq.count) + algId + bitSeq
 
@@ -78,12 +93,22 @@ enum KeyManager {
         """
     }
 
-    // MARK: - Descifrar AES (RSA-OAEP-SHA256)
+    //–––––––––––––––––––––––––––––––––––––––––––––––––
+    // Descifrar clave AES con RSA-OAEP-SHA256
     static func decryptAESKey(_ encrypted: Data) -> Data? {
         guard let priv = privateKey() else { return nil }
         return SecKeyCreateDecryptedData(priv,
                                          .rsaEncryptionOAEPSHA256,
                                          encrypted as CFData,
                                          nil) as Data?
+    }
+
+    //–––––––––––––––––––––––––––––––––––––––––––––––––
+    // ASN.1 para empaquetado PKIX
+    private static func asn1Len(_ n: Int) -> [UInt8] {
+        if n < 128 { return [UInt8(n)] }
+        var len = n, out: [UInt8] = []
+        while len > 0 { out.insert(UInt8(len & 0xFF), at: 0); len >>= 8 }
+        return [0x80 | UInt8(out.count)] + out
     }
 }

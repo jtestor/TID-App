@@ -16,10 +16,19 @@ struct Demo_App_TIDApp: App {
     init() {
         print("App inicializada (antes de KeyManager)")
         KeyManager.generateKeyPairIfNeeded()
+        
+
+      
 
         iotClient = IoTClient(manager: healthManager)
         print(" IoTClient creado")
-        iotClient.startHandshake()
+        
+        if AESKeyManager.shared.hasKey == false {
+            iotClient.startHandshake()
+        } else {
+            print("Ya existe AES Key, no se realiza handshake")
+            iotClient.fetchTelemetry()
+        }
     }
 
     var body: some Scene {
