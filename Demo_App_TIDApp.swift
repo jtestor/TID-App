@@ -17,8 +17,9 @@ struct Demo_App_TIDApp: App {
         print("App inicializada (antes de KeyManager)")
         KeyManager.generateKeyPairIfNeeded()
         
-
-      
+        // Solo para pruebas de flujo : elimina la AES Key del Keychain
+        //KeychainHelper.delete(key: "aes_key_tid")
+        //print("🗑️ AES Key eliminada del Keychain")
 
         iotClient = IoTClient(manager: healthManager)
         print(" IoTClient creado")

@@ -109,9 +109,9 @@ final class AESKeyManager {
     init() {
         if let stored = KeychainHelper.load(key: keychainKey) {
             keyData = stored
-            print("✅ AES Key restaurada desde Keychain (\(stored.count) bytes)")
+            print("AES Key restaurada desde Keychain (\(stored.count) bytes)")
         } else {
-            print("🛑 No se encontró AES Key en Keychain")
+            print("No se encontró AES Key en Keychain")
         }
     }
 
